@@ -1,59 +1,123 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Google Slides Kiosk</title>
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta http-equiv="Pragma" content="no-cache" />
-  <meta http-equiv="Expires" content="0" />
+  <title>Slides + Today's Events (16:9, Wider Calendar)</title>
   <style>
-    html, body {
-      height: 100%;
-      margin: 0;
-      background: #000;
-      overflow: hidden;
+    html, body { height: 100%; margin: 0; background: #0b0f1a; color: #e5e7eb;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, 'Apple Color Emoji', 'Segoe UI Emoji'; }
+    .frame-16x9 { position: fixed; inset: 0; display: grid; place-items: center; background: #0b0f1a; }
+    .content {
+      width: 100vw; height: 100vh; aspect-ratio: 16 / 9; box-sizing: border-box; padding: 1rem;
+      display: grid; gap: 1rem; grid-template-columns: 60% 40%; /* Calendar pane wider */
     }
-    iframe {
-      width: 100vw;
-      height: 100vh;
-      border: 0;
-      display: block;
+    .card { background: #0f172a; border: 1px solid #1f2a44; border-radius: 18px; overflow: hidden; position: relative;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.35); display: grid; grid-template-rows: auto 1fr; }
+    header {
+      padding: 0.8rem 1rem; border-bottom: 1px solid #1f2a44; background: linear-gradient(180deg, rgba(30,41,59,0.9), rgba(15,23,42,0.9));
+      display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+    }
+    header .title { font-weight: 600; letter-spacing: 0.2px; }
+    header .meta { opacity: 0.8; font-size: 0.95rem; }
+    .pane { position: relative; }
+    iframe { width: 100%; height: 100%; border: 0; display: block; background: #0b0f1a; }
+    .card::after {
+      content: ""; position: absolute; inset: 0; pointer-events: none; border-radius: 18px;
+      box-shadow: 0 0 0 1px rgba(99,102,241,0.16), 0 0 34px rgba(99,102,241,0.06) inset;
+    }
+    @media (max-aspect-ratio: 16/9) {
+      .content { grid-template-columns: 1fr; grid-template-rows: 60% 40%; }
     }
   </style>
 </head>
 <body>
-  <!-- Google Slides presentation iframe -->
-  <iframe id="deck" allowfullscreen allow="autoplay; fullscreen" referrerpolicy="no-referrer"></iframe>
+  <div class="frame-16x9">
+    <div class="content">
+      <!-- LEFT: Slides -->
+      <section class="card">
+        <header>
+          <span class="title">Slides</span>
+          <span class="meta" id="clock"></span>
+        </header>
+        <div class="pane">
+          <iframe id="slides"
+            src="https://docs.google.com/presentation/d/1VBNUtRhapFP-TqwYrrPJLTnKwWeFuIb210frxibGhmc/embed?start=true&loop=true&rm=minimal&delayms=15000"
+            allowfullscreen allow="autoplay; fullscreen">
+          </iframe>
+        </div>
+      </section>
+
+      <!-- RIGHT: Fixed Today's Agenda -->
+      <section class="card">
+        <header>
+          <span class="title">Today's Events</span>
+          <span class="meta" id="todayBadge">Loading…</span>
+        </header>
+        <div class="pane">
+          <iframe id="agenda" title="Agenda - Today"></iframe>
+        </div>
+      </section>
+    </div>
+  </div>
 
   <script>
-    // === CONFIG ===
-    const DECK_ID = '1VBNUtRhapFP-TqwYrrPJLTnKwWeFuIb210frxibGhmc'; // your slide ID
-    const REFRESH_MS = 20 * 60 * 1000; // 20 minutes in ms
+    const CAL_ID = '48n1rjef2snmrlbk3iot9bb25v73tv5q@import.calendar.google.com';
+    const TZ = 'America/New_York';
+    const PAGE_REFRESH_MINUTES = 30;
 
-    // Use the /embed endpoint with autoplay+loop, minimal chrome, and slide delay of 5 seconds (5000ms)
-    const EMBED_BASE = `https://docs.google.com/presentation/d/${DECK_ID}/embed?start=true&loop=true&rm=minimal&delayms=5000`;
+    function startOfDay(d) { return new Date(d.getFullYear(), d.getMonth(), d.getDate()); }
+    function addDays(d, n) { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+    function fmtYMD(d) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const dd = String(d.getDate()).padStart(2, '0');
+      return `${y}${m}${dd}`;
+    }
+    function fmtHuman(d) {
+      return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+    }
+    function buildAgendaUrl(start, end) {
+      const base = 'https://calendar.google.com/calendar/embed';
+      const p = new URLSearchParams({
+        src: CAL_ID,
+        ctz: TZ,
+        mode: 'AGENDA',
+        showTitle: '0',
+        showNav: '0',
+        showDate: '0',
+        showPrint: '0',
+        showTabs: '0',
+        showCalendars: '0',
+        showTz: '0',
+        _: String(Date.now())
+      });
+      p.set('dates', `${fmtYMD(start)}/${fmtYMD(end)}`);
+      return `${base}?${p.toString()}`;
+    }
 
-    // Cache-busting function so refresh truly reloads the latest
-    const embedURL = () => `${EMBED_BASE}&t=${Date.now()}`;
+    function loadToday() {
+      const now = new Date();
+      const start = startOfDay(now);
+      const end = addDays(start, 1); // today only
+      document.getElementById('agenda').src = buildAgendaUrl(start, end);
+      document.getElementById('todayBadge').textContent = fmtHuman(start);
+    }
 
-    const iframe = document.getElementById('deck');
+    // Clock
+    function tickClock() {
+      const d = new Date();
+      const s = d.toLocaleString(undefined, { weekday: 'short', hour: 'numeric', minute: '2-digit' });
+      document.getElementById('clock').textContent = s;
+    }
+    setInterval(tickClock, 1000);
+    tickClock();
 
     // Initial load
-    function load() {
-      iframe.src = embedURL();
-    }
+    loadToday();
 
-    // Auto-refresh the iframe content
-    function refresh() {
-      iframe.src = embedURL();
-    }
-
-    // Kick things off
-    load();
-
-    // Auto-refresh every 20 minutes
-    setInterval(refresh, REFRESH_MS);
+    // Full page reload every 30 minutes
+    setInterval(() => { location.reload(); }, PAGE_REFRESH_MINUTES * 60 * 1000);
   </script>
 </body>
 </html>
